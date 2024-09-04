@@ -1,6 +1,6 @@
 # HAL9000
 Chatbot audio a texto y texto a audio
-Aquí puedes descargar el .exe para Windows: [https://huggingface.co/Agnuxo/HAL_9000-QWEN2-0.5_Spanish_English_16bit/resolve/main/HAL-9000](https://huggingface.co/Agnuxo/HAL_9000-QWEN2-0.5_Spanish_English_16bit/resolve/main/HAL-9000.exe)
+Aquí puedes descargar el .exe para Windows: 
 
 ![Screenshot at 2024-09-04 12-12-39](https://github.com/user-attachments/assets/7f6ab32a-342c-4445-b82c-41ac86489e73)
 
