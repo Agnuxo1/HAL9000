@@ -43,7 +43,8 @@ This model has been fine-tuned for various tasks and evaluated on the following 
 **Accuracy:** 0.6446
 **F1:** 0.7709
 
-![GLUE_MRPC Metrics](./GLUE_MRPC_metrics.png)
+![GLUE_MRPC_metrics](https://github.com/user-attachments/assets/5784fe77-db4d-4250-8991-7141cb5e529d)
+
 
 
 Model Size: 1,543,717,376 parameters
