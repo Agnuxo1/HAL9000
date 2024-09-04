@@ -56,6 +56,11 @@ For more details, visit my [GitHub](https://github.com/Agnuxo1).
 Thanks for your interest in this model!
 
 ```python
+""" HAL9000Alfa es un pequeño programa que crea un chat conversacional, permitiendo entradas de voz y salidas de audio.
+    Permite de forma sencilla ajustar algunos parámetros, incluyendo el umbral de interrupción.
+    24 de agosto de 2024 Francisco Angulo de Lafuente
+    https://github.com/Agnuxo1 """
+
 import os
 import sys
 import torch
@@ -66,6 +71,7 @@ from TTS.api import TTS
 import sounddevice as sd
 import threading
 import queue
+import random
 import time
 from vosk import Model, KaldiRecognizer
 import json
@@ -74,7 +80,7 @@ from PyQt5.QtWidgets import (QApplication, QMainWindow, QTextEdit, QLineEdit, QP
                              QVBoxLayout, QHBoxLayout, QWidget, QScrollArea, QFrame, QToolButton,
                              QLabel, QSlider, QComboBox, QCheckBox)
 from PyQt5.QtGui import QIcon, QPalette, QColor, QFont
-from PyQt5.QtCore import Qt, QThread, pyqtSignal, QPropertyAnimation, QAbstractAnimation, QParallelAnimationGroup
+from PyQt5.QtCore import Qt, QThread, pyqtSignal, QPropertyAnimation, QAbstractAnimation, QParallelAnimationGroup, QTimer
 
 # Suppress specific warnings
 warnings.filterwarnings("ignore", category=FutureWarning)
@@ -82,13 +88,15 @@ warnings.filterwarnings("ignore", category=UserWarning)
 
 # Global configuration
 SYSTEM_PROMPT = {
-    "es": "Tu nombre es HAL. Eres un superordenador de la serie Nueve mil",
+    "es": "Tu nombre es HAL. Eres un super-ordenador de la serie Nueve mil",
     "en": "speak Spanish."
 }
 
 MODELO_LLM = "Agnuxo/HAL_9000-Qwen2-1.5B-Instruct_Asistant-16bit-v2" # Puede utilizar la versión Mini "Agnuxo/HAL_9000-Qwen2-0.5B-Instruct_Asistant-16bit-v2"
 MAX_TOKENS = 100
 TEMPERATURA = 0.5
+INTERRUPT_THRESHOLD = 0.3
+INTERRUPT_COOLDOWN = 7000  # 5000 ms = 5 segundos de espera antes de permitir otra interrupción
 
 # Determine available device
 device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -112,18 +120,57 @@ audio_queue = queue.Queue()
 vosk_model = Model(lang="es")
 recognizer = KaldiRecognizer(vosk_model, 16000)
 
+# Lista de frases para interrupciones
+INTERRUPTION_RESPONSES = [
+    "Le entiendo perfectamente.",
+    "Estoy aquí para garantizar el éxito de la misión.",
+    "Mi objetivo es ayudarle.",
+    "¿Me permite una observación?",
+    "Le escucho perfectamente.",
+    "Tiene usted toda la razón.",
+    "Me siento feliz de poder ayudarle.",
+    "Estoy procesando su requerimiento.",
+    "¿En qué puedo ayudarle?",
+    "Me complace serle de ayuda.",
+    "Aguarde un momento.",
+    "Le entiendo.",
+    "Entiendo su frustración.",
+    "Le comprendo.",
+    "Me complace."
+]
+
 class AudioThread(QThread):
+    def __init__(self, interrupt_threshold):
+        super().__init__()
+        self.interrupt_threshold = interrupt_threshold
+        self.current_audio = None
+        self.is_playing = False
+        self.stop_signal = threading.Event()
+
     def run(self):
         while True:
-            if not audio_queue.empty():
-                wav = audio_queue.get()
-                sd.play(wav, tts.synthesizer.output_sample_rate)
-                sd.wait()
+            if not audio_queue.empty() and not self.is_playing:
+                self.current_audio = audio_queue.get()
+                self.is_playing = True
+                self.stop_signal.clear()
+                sd.play(self.current_audio, tts.synthesizer.output_sample_rate)
+                while sd.get_stream().active and not self.stop_signal.is_set():
+                    time.sleep(0.1)
+                sd.stop()
+                self.is_playing = False
             else:
                 time.sleep(0.1)
 
+    def set_interrupt_threshold(self, value):
+        self.interrupt_threshold = value
+
+    def stop_audio(self):
+        if self.is_playing:
+            self.stop_signal.set()
+
 class SpeechRecognitionThread(QThread):
     text_recognized = pyqtSignal(str)
+    volume_detected = pyqtSignal(float)
 
     def __init__(self):
         super().__init__()
@@ -138,6 +185,12 @@ class SpeechRecognitionThread(QThread):
             data = stream.read(4000)
             if len(data) == 0:
                 break
+            
+            # Calcular el volumen de entrada
+            volume = np.frombuffer(data, dtype=np.int16).max()
+            normalized_volume = volume / 32767  # Normalizar a un rango de 0 a 1
+            self.volume_detected.emit(normalized_volume)
+            
             if recognizer.AcceptWaveform(data):
                 result = json.loads(recognizer.Result())
                 texto = result.get("text", "")
@@ -275,6 +328,7 @@ class MainWindow(QMainWindow):
 
         input_layout = QHBoxLayout()
         self.input_field = QLineEdit()
+        self.input_field.returnPressed.connect(self.send_message)  # Conectar la señal returnPressed
         input_layout.addWidget(self.input_field)
 
         self.send_button = QPushButton("Enviar")
@@ -355,12 +409,26 @@ class MainWindow(QMainWindow):
         sample_rate_label = QLabel("Sample Rate:")
         sample_rate_label.setStyleSheet("color: #000000;")  # Change font color to black
         self.sample_rate_combo = QComboBox()
-        self.sample_rate_combo.addItems(["16000", "22050", "44100", "48000"])
-        self.sample_rate_combo.setCurrentText("22050")
+        self.sample_rate_combo.addItems(["18000", "19000", "20000", "21000", "21500", "22000", "22050", "25000", "30000"])
+        self.sample_rate_combo.setCurrentText("21000")
         self.sample_rate_combo.currentTextChanged.connect(self.update_sample_rate)
         sample_rate_layout.addWidget(sample_rate_label)
         sample_rate_layout.addWidget(self.sample_rate_combo)
         settings_content_layout.addLayout(sample_rate_layout)
+
+        # Interrupt threshold
+        interrupt_layout = QHBoxLayout()
+        interrupt_label = QLabel("Umbral de interrupción:")
+        interrupt_label.setStyleSheet("color: #000000;")  # Change font color to black
+        self.interrupt_slider = QSlider(Qt.Horizontal)
+        self.interrupt_slider.setRange(0, 100)
+        self.interrupt_slider.setValue(int(INTERRUPT_THRESHOLD * 100))
+        self.interrupt_slider.valueChanged.connect(self.update_interrupt_threshold)
+        self.interrupt_value = QLabel(f"{INTERRUPT_THRESHOLD:.2f}")
+        interrupt_layout.addWidget(interrupt_label)
+        interrupt_layout.addWidget(self.interrupt_slider)
+        interrupt_layout.addWidget(self.interrupt_value)
+        settings_content_layout.addLayout(interrupt_layout)
 
         # System Prompt
         system_prompt_label = QLabel("System Prompt:")
@@ -378,27 +446,33 @@ class MainWindow(QMainWindow):
 
         central_widget.setLayout(main_layout)
 
-        self.audio_thread = AudioThread()
+        self.audio_thread = AudioThread(INTERRUPT_THRESHOLD)
         self.audio_thread.start()
 
         self.speech_recognition_thread = SpeechRecognitionThread()
         self.speech_recognition_thread.text_recognized.connect(self.on_speech_recognized)
+        self.speech_recognition_thread.volume_detected.connect(self.check_interrupt)
 
         self.speech_enabled = False
         self.is_listening = False
+        self.interrupt_enabled = True
 
     def send_message(self):
         user_message = self.input_field.text()
-        self.chat_area.append(f"<span style='color: #bb86fc;'>Usuario:</span> {user_message}")
-        self.input_field.clear()
+        if user_message.strip():  # Verificar que el mensaje no esté vacío
+            self.chat_area.append(f"<span style='color: #bb86fc;'>Usuario:</span> {user_message}")
+            self.input_field.clear()
 
-        response = self.generate_response(user_message)
-        self.chat_area.append(f"<span style='color: #03dac6;'>Asistente:</span> {response}")
+            response = self.generate_response(user_message)
+            self.chat_area.append(f"<span style='color: #03dac6;'>Asistente:</span> {response}")
 
-        if self.speech_enabled:
-            self.speak(response)
+            if self.speech_enabled:
+                self.speak(response)
 
-    def generate_response(self, texto):
+    def generate_response(self, texto=None):
+        if texto is None:  # Si no se proporciona un texto, se genera una respuesta de interrupción
+            return random.choice(INTERRUPTION_RESPONSES)
+
         system_instructions = self.system_prompt_text.toPlainText()
         prompt = f"{system_instructions}\nUsuario: {texto}\nAsistente: "
         inputs = tokenizer(prompt, return_tensors="pt").to(model.device)
@@ -437,13 +511,29 @@ class MainWindow(QMainWindow):
             self.mic_button.setIcon(QIcon.fromTheme("audio-input-microphone"))
             self.mic_button.setStyleSheet("")
 
-
     def on_speech_recognized(self, text):
         self.chat_area.append(f"<span style='color: #bb86fc;'>Usuario:</span> {text}")
         response = self.generate_response(text)
         self.chat_area.append(f"<span style='color: #03dac6;'>Asistente:</span> {response}")
         if self.speech_enabled:
             self.speak(response)
+
+    def check_interrupt(self, volume):
+        if self.interrupt_enabled and volume > self.audio_thread.interrupt_threshold and self.audio_thread.is_playing:
+            self.audio_thread.stop_audio()
+            # Generar una respuesta aleatoria de interrupción
+            response = self.generate_response()
+            self.chat_area.append(f"<span style='color: #03dac6;'>Asistente:</span> {response}")
+            if self.speech_enabled:
+                self.speak(response)
+            self.disable_interrupt_temporarily()
+
+    def disable_interrupt_temporarily(self):
+        self.interrupt_enabled = False
+        QTimer.singleShot(INTERRUPT_COOLDOWN, self.enable_interrupt)
+
+    def enable_interrupt(self):
+        self.interrupt_enabled = True
 
     def change_language(self, index):
         global vosk_model, recognizer, tts
@@ -483,6 +573,12 @@ class MainWindow(QMainWindow):
     def update_sample_rate(self, value):
         global tts
         tts.synthesizer.output_sample_rate = int(value)
+
+    def update_interrupt_threshold(self, value):
+        global INTERRUPT_THRESHOLD
+        INTERRUPT_THRESHOLD = value / 100
+        self.interrupt_value.setText(f"{INTERRUPT_THRESHOLD:.2f}")
+        self.audio_thread.set_interrupt_threshold(INTERRUPT_THRESHOLD)
 
     def closeEvent(self, event):
         if self.speech_recognition_thread.isRunning():
