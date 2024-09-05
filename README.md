@@ -88,7 +88,7 @@ warnings.filterwarnings("ignore", category=UserWarning)
 
 # Global configuration
 SYSTEM_PROMPT = {
-    "es": "Tu nombre es HAL. Eres un super-ordenador de la serie Nueve mil",
+    "es": "No puedes hablar en nombre del usuario. no puedes hablar como el usuario. Tu nombre es HAL. Eres un super-ordenador de la serie Nueve mil",
     "en": "speak Spanish."
 }
 
@@ -96,7 +96,7 @@ MODELO_LLM = "Agnuxo/HAL_9000-Qwen2-1.5B-Instruct_Asistant-16bit-v2" # Puede uti
 MAX_TOKENS = 100
 TEMPERATURA = 0.5
 INTERRUPT_THRESHOLD = 0.3
-INTERRUPT_COOLDOWN = 7000  # 5000 ms = 5 segundos de espera antes de permitir otra interrupción
+INTERRUPT_COOLDOWN = 7000  # 7000 ms = 7 segundos de espera antes de permitir otra interrupción
 
 # Determine available device
 device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -138,6 +138,9 @@ INTERRUPTION_RESPONSES = [
     "Le comprendo.",
     "Me complace."
 ]
+
+# Variable para controlar el tiempo de la última interrupción
+last_interruption_time = 0
 
 class AudioThread(QThread):
     def __init__(self, interrupt_threshold):
@@ -470,8 +473,14 @@ class MainWindow(QMainWindow):
                 self.speak(response)
 
     def generate_response(self, texto=None):
+        global last_interruption_time
         if texto is None:  # Si no se proporciona un texto, se genera una respuesta de interrupción
-            return random.choice(INTERRUPTION_RESPONSES)
+            current_time = time.time()
+            if current_time - last_interruption_time >= 10:
+                last_interruption_time = current_time
+                return random.choice(INTERRUPTION_RESPONSES)
+            else:
+                return "Por favor, espere un momento antes de interrumpir de nuevo."
 
         system_instructions = self.system_prompt_text.toPlainText()
         prompt = f"{system_instructions}\nUsuario: {texto}\nAsistente: "
